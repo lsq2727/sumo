@@ -142,6 +142,8 @@ let ws = null;
 let subscribed = new Set();
 let latestVehicles = [];   
 let net = { polylines: [], bounds: [0,0,1,1] };
+const MAX_POINTS = 200;
+let playbackFrames = [];
 
 function setPill(id, text) { document.getElementById(id).textContent = text; }
 function showPanel(id, on) { 
@@ -235,47 +237,185 @@ document.getElementById("btnSendCtrl").addEventListener("click", async () => {
 // --- Charts & Maps Helpers (Simplified for brevity, same logic as before) ---
 let tbuf=[], cbuf=[], sbuf=[];
 function drawDualLineChart(canvas, xs, ys1, ys2) {
-    // (Keep your original drawing logic here)
-    // For brevity in this response, I assume the original draw logic exists
-    // Simulating simple draw to avoid empty canvas error in this snippet
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.fillText("Chart Active", 10, 20);
-} 
-// (Note: In the full file I provided in the zip, I kept the full draw functions)
+    if (!xs.length) {
+        ctx.fillStyle = "#9ca3af";
+        ctx.fillText("暂无数据", 10, 20);
+        return;
+    }
+    const pad = {l:40, r:10, t:10, b:24};
+    const w = canvas.width - pad.l - pad.r;
+    const h = canvas.height - pad.t - pad.b;
+    const minX = xs[0];
+    const maxX = xs[xs.length - 1];
+    const minY = Math.min(...ys1, ...ys2);
+    const maxY = Math.max(...ys1, ...ys2);
+    const spanX = maxX - minX || 1;
+    const spanY = maxY - minY || 1;
+
+    ctx.strokeStyle = "#e5e7eb";
+    ctx.beginPath();
+    ctx.moveTo(pad.l, pad.t);
+    ctx.lineTo(pad.l, pad.t + h);
+    ctx.lineTo(pad.l + w, pad.t + h);
+    ctx.stroke();
+
+    const mapX = (x) => pad.l + ((x - minX) / spanX) * w;
+    const mapY = (y) => pad.t + h - ((y - minY) / spanY) * h;
+
+    const drawLine = (ys, color) => {
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        ys.forEach((y, i) => {
+            const x = mapX(xs[i]);
+            const yy = mapY(y);
+            if (i === 0) ctx.moveTo(x, yy);
+            else ctx.lineTo(x, yy);
+        });
+        ctx.stroke();
+    };
+
+    drawLine(ys1, "#2563eb");
+    drawLine(ys2, "#16a34a");
+    ctx.fillStyle = "#6b7280";
+    ctx.fillText(`${minY.toFixed(1)}~${maxY.toFixed(1)}`, 6, 14);
+}
+
+function normalizeBounds(bounds) {
+    const [minX, minY, maxX, maxY] = bounds;
+    if (maxX - minX <= 1 || maxY - minY <= 1) return null;
+    return bounds;
+}
+
+function updateBoundsFromVehicles(vehicles) {
+    if (!vehicles.length) return;
+    const xs = vehicles.map(v => v.x);
+    const ys = vehicles.map(v => v.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    if (maxX - minX > 1 && maxY - minY > 1) {
+        net.bounds = [minX, minY, maxX, maxY];
+    }
+}
+
 
 function onSummary(p) {
     document.getElementById("kpiSim").textContent = p.sim_time.toFixed(1);
     document.getElementById("kpiCnt").textContent = p.vehicle_count;
-    // Update chart logic...
+    tbuf.push(p.sim_time);
+    cbuf.push(p.vehicle_count);
+    sbuf.push(p.avg_speed || 0);
+    if (tbuf.length > MAX_POINTS) {
+        tbuf.shift();
+        cbuf.shift();
+        sbuf.shift();
+    }
+    drawDualLineChart(document.getElementById("chart"), tbuf, cbuf, sbuf);
 }
 function onVehicles(p) {
-    latestVehicles = (p.vehicles||[]).map(v=>({x:v.x, y:v.y}));
+    latestVehicles = (p.vehicles||[])
+      .filter(v => !(v.x === 0 && v.y === 0))
+      .map(v=>({x:v.x, y:v.y}));
+    if (!normalizeBounds(net.bounds)) {
+        updateBoundsFromVehicles(latestVehicles);
+    }
     const ctx = document.getElementById("map").getContext("2d");
     ctx.clearRect(0,0,980,420);
     drawNet(ctx);
     ctx.fillStyle="red";
+    const bounds = normalizeBounds(net.bounds) || [0,0,1,1];
+    const [minX, minY, maxX, maxY] = bounds;
+    const dx = maxX - minX || 1;
+    const dy = maxY - minY || 1;
     latestVehicles.forEach(v => {
-        // Map projection logic needed here (same as original code)
-        // Simplified for this text block
-        const cx = (v.x - net.bounds[0]) / (net.bounds[2]-net.bounds[0]) * 980;
-        const cy = 420 - (v.y - net.bounds[1]) / (net.bounds[3]-net.bounds[1]) * 420; 
+        const cx = (v.x - minX) / dx * 980;
+        const cy = 420 - (v.y - minY) / dy * 420; 
         ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 6.28); ctx.fill();
     });
 }
 function drawNet(ctx){
-    ctx.strokeStyle="#eee";
-    // simplified drawing
+    ctx.strokeStyle="#e5e7eb";
+    ctx.lineWidth = 1;
+    (net.polylines || []).forEach(line => {
+        if (!line.length) return;
+        ctx.beginPath();
+        line.forEach((pt, idx) => {
+            const [x,y] = pt;
+            const bounds = normalizeBounds(net.bounds) || [0,0,1,1];
+            const [minX, minY, maxX, maxY] = bounds;
+            const dx = maxX - minX || 1;
+            const dy = maxY - minY || 1;
+            const cx = (x - minX) / dx * 980;
+            const cy = 420 - (y - minY) / dy * 420;
+            if (idx === 0) ctx.moveTo(cx, cy);
+            else ctx.lineTo(cx, cy);
+        });
+        ctx.stroke();
+    });
 }
 function onTLS(p) {
     const box = document.getElementById("tlsBox");
     let h = "";
     (p.tls||[]).forEach(t=>{
-        h += `<div style="margin:5px 0;border-bottom:1px solid #eee;"><b>${t.tls_id}</b> remain:${t.phase_remaining}s</div>`;
+       const colors = (t.state || "").split("");
+        const colorBadge = (c) => {
+            const map = {G:"#16a34a", g:"#22c55e", r:"#dc2626", y:"#f59e0b", R:"#b91c1c"};
+            const label = map[c] ? c : "-";
+            const bg = map[c] || "#9ca3af";
+            return `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${bg};margin-right:4px;"></span>${label}`;
+        };
+        const laneHtml = colors.map((c, idx) => `<span style="margin-right:10px;">Lane${idx+1}: ${colorBadge(c)}</span>`).join("");
+        h += `<div style="margin:6px 0;padding-bottom:6px;border-bottom:1px solid #eee;"><b>${t.tls_id}</b> remain:${Number(t.phase_remaining || 0).toFixed(1)}s<div style="margin-top:4px;font-size:12px;color:#374151;">${laneHtml}</div></div>`;
     });
     box.innerHTML = h;
 }
-function onHist(p) { /* ... */ }
+function onHist(p) {
+    const pts = p.points || [];
+    const xs = pts.map(pt => pt.sim_time);
+    const ys1 = pts.map(pt => pt.vehicle_count);
+    const ys2 = pts.map(pt => pt.avg_speed);
+    drawDualLineChart(document.getElementById("histChart"), xs, ys1, ys2);
+}
+
+function renderPlaybackFrame(idx) {
+    const ctx = document.getElementById("playMap").getContext("2d");
+    ctx.clearRect(0,0,980,420);
+    drawNet(ctx);
+    const frame = playbackFrames[idx];
+    if (!frame) return;
+    const bounds = normalizeBounds(net.bounds) || [0,0,1,1];
+    const [minX, minY, maxX, maxY] = bounds;
+    const dx = maxX - minX || 1;
+    const dy = maxY - minY || 1;
+    ctx.fillStyle = "#f97316";
+    (frame.vehicles || []).forEach(v => {
+        if (v.x === 0 && v.y === 0) return;
+        const cx = (v.x - minX) / dx * 980;
+        const cy = 420 - (v.y - minY) / dy * 420;
+        ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 6.28); ctx.fill();
+    });
+    document.getElementById("playInfo").textContent = `frame:${frame.frame_id} time:${frame.sim_time.toFixed(1)}s`;
+}
+
+async function loadPlayback() {
+    const source = document.getElementById("source").value;
+    const stride = document.getElementById("stride").value;
+    const res = await fetch(`/api/history/playback?source=${encodeURIComponent(source)}&stride=${encodeURIComponent(stride)}`);
+    const json = await res.json();
+    playbackFrames = json.frames || [];
+    const slider = document.getElementById("play");
+    slider.max = Math.max(0, playbackFrames.length - 1);
+    slider.value = 0;
+    renderPlaybackFrame(0);
+}
+
+document.getElementById("play").addEventListener("input", (e) => {
+    renderPlaybackFrame(parseInt(e.target.value, 10));
+});
+document.getElementById("btnReload").addEventListener("click", loadPlayback);
 
 // Load Net
 async function loadNet() {
@@ -287,6 +427,7 @@ async function loadNet() {
   await loadNet();
   connectWS();
   updateSubscriptions();
+  loadPlayback();
 })();
 </script>
 </body>
