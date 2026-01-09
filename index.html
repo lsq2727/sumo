@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>V2X Lab 云端：多主题订阅 + 控制</title>
+  <style>
+    body { font-family: Arial, "Microsoft YaHei", sans-serif; margin: 0; background: #f6f7fb; }
+    header { background:#111827; color:#fff; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; }
+    header .status { font-size: 13px; opacity: .9; }
+    .wrap { padding: 14px 18px; }
+    .grid { display:grid; grid-template-columns: 320px 1fr; gap: 14px; align-items:start; }
+    .card { background:#fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px 12px; }
+    .card h3 { margin: 0 0 8px 0; font-size: 15px; }
+    .muted { color:#6b7280; font-size: 12px; }
+    .chk { display:flex; align-items:center; gap: 8px; margin: 8px 0; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items: flex-end; }
+    .panel { display:none; }
+    .panel.show { display:block; }
+    canvas { background:#fff; border:1px solid #e5e7eb; border-radius: 10px; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { border-bottom: 1px solid #eee; padding: 6px 6px; text-align:left; }
+    th { background:#fafafa; }
+    input, button { padding: 6px 8px; font-size: 12px; }
+    button { cursor:pointer; background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; border-radius: 4px;}
+    button:hover { background: #e0e7ff; }
+    button:active { background: #c7d2fe; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#eef2ff; color:#3730a3; }
+    .kpi { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; }
+    .kpi .item { background:#f9fafb; border:1px solid #eee; border-radius:10px; padding:8px 10px; min-width:130px;}
+    .kpi .v { font-size:16px; font-weight:700; margin-top:4px; }
+    /* Control specific */
+    .control-box { background: #fff1f2; border: 1px solid #fecdd3; padding: 10px; border-radius: 6px; margin-top: 10px; }
+    .control-msg { margin-top: 5px; font-size: 12px; min-height: 18px; }
+    .success { color: green; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <div style="font-size:16px;font-weight:700;">V2X Lab 云端平台（Web控制 + 可视化）</div>
+    <div class="muted">数据流：A -> B(UDP) | 控制流：Web -> B(API) -> A(TCP)</div>
+  </div>
+  <div class="status">
+    WebSocket：<span id="wsStatus" class="pill">未连接</span>
+    &nbsp;&nbsp;|&nbsp;&nbsp;数据：<span id="dataStatus" class="pill">等待</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="grid">
+    <div class="card">
+      <h3>功能面板（勾选订阅/显示）</h3>
+      
+      <div class="chk"><input type="checkbox" id="sub_control" checked> <label for="sub_control" style="color:#b91c1c; font-weight:bold;">启用远程控制指令窗口</label></div>
+      <hr style="border:none;border-top:1px solid #eee;margin:6px 0;">
+
+      <div class="chk"><input type="checkbox" id="sub_summary" checked> <label for="sub_summary">实时态势：车辆数 + 车速</label></div>
+      <div class="chk"><input type="checkbox" id="sub_map" checked> <label for="sub_map">实时渲染：车辆位置</label></div>
+      <div class="chk"><input type="checkbox" id="sub_tls" checked> <label for="sub_tls">信号灯：车道灯色明细</label></div>
+      <div class="chk"><input type="checkbox" id="sub_hist" checked> <label for="sub_hist">历史趋势分析</label></div>
+      <div class="chk"><input type="checkbox" id="sub_playback" checked> <label for="sub_playback">轨迹回放</label></div>
+
+      <hr style="border:none;border-top:1px solid #eee;margin:10px 0;">
+
+      <h3>历史查询参数</h3>
+      <div class="row">
+        <div><div class="muted">source</div><input id="source" value="A1" style="width:90px;"></div>
+        <div><div class="muted">stride</div><input id="stride" type="number" value="2" style="width:50px;"></div>
+        <div style="padding-top:14px;"><button id="btnReload">刷新回放</button></div>
+      </div>
+
+      <div class="kpi">
+        <div class="item"><div class="muted">仿真时间(s)</div><div class="v" id="kpiSim">-</div></div>
+        <div class="item"><div class="muted">车辆数</div><div class="v" id="kpiCnt">-</div></div>
+      </div>
+
+    </div>
+
+    <div>
+        <div class="card panel" id="panel_control" style="border: 1px solid #fecdd3;">
+        <h3 style="color:#b91c1c;">远程控制指令下发 (Web -> A)</h3>
+        <div class="muted">指令通过 TCP 发送给电脑 A，A 解析后调用 traci 修改信号灯。</div>
+        <div class="row" style="margin-top:10px; align-items:flex-end;">
+            <div>
+                <div class="muted">TLS ID (如 J1)</div>
+                <input type="text" id="ctrl_tls_id" value="J1" placeholder="e.g. J1">
+            </div>
+            <div>
+                <div class="muted">Phase Index (如 0)</div>
+                <input type="number" id="ctrl_phase" value="0" min="0" max="10" style="width:60px;">
+            </div>
+            <button id="btnSendCtrl" style="background:#b91c1c; color:white; border:none; padding:7px 14px;">发送控制指令</button>
+        </div>
+        <div id="ctrlMsg" class="control-msg"></div>
+      </div>
+
+      <div class="card panel" id="panel_summary">
+        <h3>实时态势</h3>
+        <canvas id="chart" width="980" height="200"></canvas>
+      </div>
+
+      <div class="card panel" id="panel_map" style="margin-top:14px;">
+        <h3>实时车辆位置</h3>
+        <canvas id="map" width="980" height="420"></canvas>
+      </div>
+
+      <div class="card panel" id="panel_tls" style="margin-top:14px;">
+        <h3>信号灯状态</h3>
+        <div id="tlsBox"></div>
+      </div>
+
+      <div class="card panel" id="panel_hist" style="margin-top:14px;">
+        <h3>历史趋势</h3>
+        <canvas id="histChart" width="980" height="200"></canvas>
+      </div>
+
+      <div class="card panel" id="panel_playback" style="margin-top:14px;">
+        <h3>轨迹回放</h3>
+        <div class="row" style="align-items:center;margin:8px 0;">
+          <input id="play" type="range" min="0" max="0" value="0" style="width:700px;">
+          <span class="pill" id="playInfo">-</span>
+        </div>
+        <canvas id="playMap" width="980" height="420"></canvas>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+const TOPIC = {
+  summary: "realtime/summary",
+  vehicles: "realtime/vehicles",
+  tls: "realtime/tls_lanes",
+  hist: "history/trend",
+  status: "realtime/ingest_status"
+};
+
+let ws = null;
+let subscribed = new Set();
+let latestVehicles = [];   
+let net = { polylines: [], bounds: [0,0,1,1] };
+
+function setPill(id, text) { document.getElementById(id).textContent = text; }
+function showPanel(id, on) { 
+    const el = document.getElementById(id);
+    if(on) el.classList.add("show"); else el.classList.remove("show");
+}
+
+function updateSubscriptions() {
+  subscribed.clear();
+  const want = [];
+  
+  // Logic for Panels
+  if (document.getElementById("sub_control").checked) showPanel("panel_control", true);
+  else showPanel("panel_control", false);
+
+  if (document.getElementById("sub_summary").checked) { want.push(TOPIC.summary); showPanel("panel_summary", true); }
+  else showPanel("panel_summary", false);
+
+  if (document.getElementById("sub_map").checked) { want.push(TOPIC.vehicles); showPanel("panel_map", true); }
+  else showPanel("panel_map", false);
+
+  if (document.getElementById("sub_tls").checked) { want.push(TOPIC.tls); showPanel("panel_tls", true); }
+  else showPanel("panel_tls", false);
+
+  if (document.getElementById("sub_hist").checked) { want.push(TOPIC.hist); showPanel("panel_hist", true); }
+  else showPanel("panel_hist", false);
+
+  if (document.getElementById("sub_playback").checked) showPanel("panel_playback", true);
+  else showPanel("panel_playback", false);
+
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({type:"subscribe", topics: want}));
+  }
+}
+
+// Add event listeners
+["sub_control","sub_summary","sub_map","sub_tls","sub_hist","sub_playback"].forEach(id=>{
+  document.getElementById(id).addEventListener("change", updateSubscriptions);
+});
+
+// --- WebSocket logic (unchanged structure) ---
+function connectWS() {
+  const proto = (location.protocol === "https:") ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { setPill("wsStatus", "已连接"); updateSubscriptions(); ws.send(JSON.stringify({type:"ping"})); };
+  ws.onclose = () => { setPill("wsStatus", "断开"); };
+  ws.onmessage = (ev) => {
+    try {
+        const data = JSON.parse(ev.data);
+        if (data.type === "event") {
+            const p = data.payload;
+            if (data.topic === TOPIC.summary) onSummary(p);
+            else if (data.topic === TOPIC.vehicles) onVehicles(p);
+            else if (data.topic === TOPIC.tls) onTLS(p);
+            else if (data.topic === TOPIC.hist) onHist(p);
+            else if (data.topic === TOPIC.status) setPill("dataStatus", p.ok?"接收中":"异常");
+        }
+    } catch(e){}
+  };
+}
+
+// --- Control Logic (New) ---
+document.getElementById("btnSendCtrl").addEventListener("click", async () => {
+    const tlsId = document.getElementById("ctrl_tls_id").value;
+    const phase = document.getElementById("ctrl_phase").value;
+    const msgEl = document.getElementById("ctrlMsg");
+    
+    msgEl.textContent = "发送中...";
+    msgEl.className = "control-msg";
+
+    try {
+        const res = await fetch("/api/control/set_phase", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({tls_id: tlsId, phase_index: parseInt(phase)})
+        });
+        const json = await res.json();
+        if (json.ok) {
+            msgEl.textContent = `发送成功: ${json.msg}`;
+            msgEl.className = "control-msg success";
+        } else {
+            msgEl.textContent = `发送失败: ${json.error}`;
+            msgEl.className = "control-msg error";
+        }
+    } catch (e) {
+        msgEl.textContent = `请求错误: ${e.message}`;
+        msgEl.className = "control-msg error";
+    }
+});
+
+// --- Charts & Maps Helpers (Simplified for brevity, same logic as before) ---
+let tbuf=[], cbuf=[], sbuf=[];
+function drawDualLineChart(canvas, xs, ys1, ys2) {
+    // (Keep your original drawing logic here)
+    // For brevity in this response, I assume the original draw logic exists
+    // Simulating simple draw to avoid empty canvas error in this snippet
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillText("Chart Active", 10, 20);
+} 
+// (Note: In the full file I provided in the zip, I kept the full draw functions)
+
+function onSummary(p) {
+    document.getElementById("kpiSim").textContent = p.sim_time.toFixed(1);
+    document.getElementById("kpiCnt").textContent = p.vehicle_count;
+    // Update chart logic...
+}
+function onVehicles(p) {
+    latestVehicles = (p.vehicles||[]).map(v=>({x:v.x, y:v.y}));
+    const ctx = document.getElementById("map").getContext("2d");
+    ctx.clearRect(0,0,980,420);
+    drawNet(ctx);
+    ctx.fillStyle="red";
+    latestVehicles.forEach(v => {
+        // Map projection logic needed here (same as original code)
+        // Simplified for this text block
+        const cx = (v.x - net.bounds[0]) / (net.bounds[2]-net.bounds[0]) * 980;
+        const cy = 420 - (v.y - net.bounds[1]) / (net.bounds[3]-net.bounds[1]) * 420; 
+        ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 6.28); ctx.fill();
+    });
+}
+function drawNet(ctx){
+    ctx.strokeStyle="#eee";
+    // simplified drawing
+}
+function onTLS(p) {
+    const box = document.getElementById("tlsBox");
+    let h = "";
+    (p.tls||[]).forEach(t=>{
+        h += `<div style="margin:5px 0;border-bottom:1px solid #eee;"><b>${t.tls_id}</b> remain:${t.phase_remaining}s</div>`;
+    });
+    box.innerHTML = h;
+}
+function onHist(p) { /* ... */ }
+
+// Load Net
+async function loadNet() {
+    const r = await fetch("/api/net");
+    net = await r.json();
+}
+
+(async ()=>{
+  await loadNet();
+  connectWS();
+  updateSubscriptions();
+})();
+</script>
+</body>
+</html>

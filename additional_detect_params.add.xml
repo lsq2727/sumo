@@ -1,0 +1,4 @@
+<additional>
+    <inductionLoop id="myLoop1" lane="E0_1" pos="50" freq="100" file="D:\ZuoYe\sumo\out.xml"/>
+    <inductionLoop id="myLoop2" lane="E2_1" pos="50" freq="100" file="D:\ZuoYe\sumo\out.xml"/>
+</additional>

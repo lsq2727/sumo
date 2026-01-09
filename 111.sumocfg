@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+    <input>
+        <net-file value="D:\ZuoYe\sumo\111.net.xml"/>
+        <route-files value="D:\ZuoYe\sumo\111.rou.xml"/>
+        <additional-files value="D:\ZuoYe\sumo\additional_detect_params.add.xml"/>
+    </input>
+    <time>
+        <begin value="0"/>
+        <end value="3600"/>
+        <step-length value="1"/>
+    </time>
+    <output>
+        <fcd-output value="D:\ZuoYe\sumo\output_fcd.xml"/>
+        <tripinfo-output value="D:\ZuoYe\sumo\output_tripinfo.xml"/>
+        <queue-output value="D:\ZuoYe\sumo\output_queue.xml"/>
+        <emission-output value="D:\ZuoYe\sumo\output_emission.xml"/>
+        <full-output value="D:\ZuoYe\sumo\output_full.xml"/>
+    </output>
+    <report>
+        <verbose value="true"/>
+        <no-step-log value="true"/>
+        <log value="D:\ZuoYe\sumo\sumo_run.log"/>
+    </report>
+</configuration>
+
