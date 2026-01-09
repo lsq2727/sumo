@@ -34,6 +34,7 @@ udp_q = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 tcp_q = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 last_frame_id = {"A1": -1}  # 去重用
 latest_sim_time = {"A1": 0.0}
+history_points: Dict[str, List[Dict[str, Any]]] = {}
 
 class DBWriter:
     def __init__(self, config):
@@ -393,6 +394,14 @@ def data_processor():
                     avg_speed = sum(v["speed"] for v in vehicles) / len(vehicles)
                 else:
                     avg_speed = 0.0
+                history = history_points.setdefault(source, [])
+                history.append({
+                    "sim_time": frame_rec["sim_time"],
+                    "vehicle_count": len(vehicles),
+                    "avg_speed": round(avg_speed, 2)
+                })
+                if len(history) > MAX_POINTS:
+                    history[:] = history[-MAX_POINTS:]
                 # 发布实时主题
                 ws_mgr.publish_threadsafe("realtime/summary", {
                     "source": source,
@@ -423,6 +432,10 @@ def data_processor():
                     "source": source,
                     "frame_id": frame_id,
                     "ts_ms": int(time.time() * 1000)
+                })
+                ws_mgr.publish_threadsafe("history/trend", {
+                    "source": source,
+                    "points": history
                 })
         except queue.Empty:
             continue
@@ -461,8 +474,43 @@ async def control_tls(
 # 历史回放接口
 @app.get("/api/history/playback")
 def api_history_playback(source="A1", t0=None, t1=None, stride=2, max_frames=600):
-    # 简化实现，实际需从数据库查询
-    return {"source": source, "t0": t0, "t1": t1, "count": 0, "frames": []}
+    stride = max(int(stride), 1)
+    max_frames = max(int(max_frames), 1)
+    conn = pymysql.connect(**DB_CONFIG)
+    cur = conn.cursor()
+    try:
+        sql = """
+            SELECT frame_id, sim_time, raw_json
+            FROM frames
+            WHERE source=%s
+            ORDER BY frame_id DESC
+            LIMIT %s
+        """
+        cur.execute(sql, (source, max_frames * stride))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    rows = list(reversed(rows))
+    frames = []
+    for idx, row in enumerate(rows):
+        if idx % stride != 0:
+            continue
+        frame_id, sim_time, raw_json = row
+        try:
+            raw = json.loads(raw_json)
+        except json.JSONDecodeError:
+            continue
+        vehicles = [
+            {"id": v.get("id"), "x": v.get("x", 0), "y": v.get("y", 0)}
+            for v in raw.get("vehicles", [])
+        ]
+        frames.append({
+            "frame_id": frame_id,
+            "sim_time": sim_time,
+            "vehicles": vehicles
+        })
+    return {"source": source, "t0": t0, "t1": t1, "count": len(frames), "frames": frames}
 
 @app.get("/api/net")
 def api_net():
